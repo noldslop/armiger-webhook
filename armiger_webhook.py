@@ -145,19 +145,38 @@ def map_prediction(pred: dict) -> dict:
     resp: dict = {"matched": True}
 
     # --- delete decision -------------------------------------------------
+    # owner_scope is treated as "everything": the Mondrian out-of-scope gate
+    # must NOT trigger a delete. Only junk, CSAM, honeypot, and adult-leakage do.
+    gates = pred.get("mondrian_gates") or {}
+    gate_reason = str(gates.get("safety_gate_reason") or "")
+    scope_only_failure = (
+        gates.get("safety_gate_passed") is False
+        and gate_reason.startswith("out_of_scope")
+    )
+
     delete = False
+    reasons: list[str] = []
     if pred.get("junk") == "junk":
         delete = True
+        reasons.append("junk")
     csam = pred.get("csam_safety") or {}
-    if csam.get("overall_safe_to_index") is False:
+    # csam.is_safe is the content-level CSAM flag. (overall_safe_to_index also
+    # folds in the safety gate, which we handle separately below.)
+    if csam.get("is_safe") is False:
         delete = True
+        reasons.append("csam")
     honeypot = pred.get("honeypot_trap") or {}
     if honeypot.get("is_honeypot_trap") is True:
         delete = True
-    gates = pred.get("mondrian_gates") or {}
-    if gates.get("safety_gate_passed") is False:
+        reasons.append("honeypot")
+    # gate failed for a non-scope reason (junk / adult-leakage / invalid)
+    if gates.get("safety_gate_passed") is False and not scope_only_failure:
         delete = True
+        reasons.append(gate_reason or "safety_gate")
     resp["delete"] = delete
+    if reasons:
+        # Internal-only: logged by the handler, stripped before the response.
+        resp["_delete_reasons"] = reasons
 
     # --- content type ----------------------------------------------------
     category = pred.get("category", "unknown")
@@ -303,10 +322,12 @@ class Handler(BaseHTTPRequestHandler):
             pred = pipeline.classify(row)
             resp = map_prediction(pred)
             elapsed_ms = (time.monotonic() - start) * 1000
+            delete_reasons = resp.pop("_delete_reasons", None)
             log.info(
-                "classify %s: delete=%s contentType=%s baseTitle=%r year=%s tags=%s (%.1fms)",
+                "classify %s: delete=%s delete_reasons=%s contentType=%s baseTitle=%r year=%s tags=%s (%.1fms)",
                 row["infohash"] or row["name"] or "<unnamed>",
-                resp.get("delete"), resp.get("contentType"),
+                resp.get("delete"), delete_reasons,
+                resp.get("contentType"),
                 resp.get("baseTitle"), resp.get("year"), resp.get("tags"),
                 elapsed_ms,
             )

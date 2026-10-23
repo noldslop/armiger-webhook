@@ -1,0 +1,25 @@
+[project]
+name = "armiger-webhook"
+version = "1.0.0"
+description = "Armiger bitmagnet webhook classifier service"
+requires-python = ">=3.12"
+dependencies = [
+    "torch",
+    "numpy",
+    "onnxruntime",
+    "cryptography",
+]
+
+[tool.uv]
+# This is an application, not an installable library: install dependencies
+# into the venv without building/installing a project wheel.
+package = false
+
+[tool.uv.sources]
+# Pull torch from the CPU-only PyTorch wheel index to keep the image small
+# (no CUDA). This mirrors the Dockerfile's --default-index flag.
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
