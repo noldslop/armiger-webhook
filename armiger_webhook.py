@@ -5,7 +5,7 @@ Implements the bitmagnet classifier webhook contract
 (noldslop/bitmagnet internal/classifier/action_webhook.go):
 
   POST /classify  -> JSON response with matched/delete/contentType/baseTitle/year/languages/tags
-  GET  /healthz   -> {"status":"ok"}
+  GET  /healthz   -> {"status":"ok"}, or 503 when the pipeline failed to load
 
 The service loads the Armiger Ultra pipeline (ONNX 8-head backbone + span_bio
 ONNX + zero-cue catalog + swarm survival net) from ARMIGER_MODEL_DIR and
@@ -90,25 +90,51 @@ LANG_TO_CODES = {
 }
 
 
+class BadPayload(ValueError):
+    """The request payload is malformed (client error, HTTP 400)."""
+
+
+def _as_int(value, field: str) -> int:
+    """Coerce a JSON field to int, raising BadPayload for non-numbers."""
+    if value is None or value == "":
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise BadPayload(f"{field} must be a number")
+
+
 def build_row(torrent: dict) -> dict:
-    """Map a bitmagnet webhook torrent payload to an armiger input row."""
+    """Map a bitmagnet webhook torrent payload to an armiger input row.
+
+    Raises BadPayload when the payload shape is malformed.
+    """
+    if not isinstance(torrent, dict):
+        raise BadPayload("torrent must be an object")
+    raw_files = torrent.get("files") or []
+    if not isinstance(raw_files, list):
+        raise BadPayload("torrent.files must be a list")
     files = []
-    for f in torrent.get("files", []) or []:
+    for i, f in enumerate(raw_files):
+        if not isinstance(f, dict):
+            raise BadPayload(f"torrent.files[{i}] must be an object")
         files.append(
             {
-                "path": f.get("path", ""),
-                "size": int(f.get("size", 0) or 0),
+                "path": f.get("path") or "",
+                "size": _as_int(f.get("size"), f"torrent.files[{i}].size"),
             }
         )
-    swarm = torrent.get("swarm", {}) or {}
+    swarm = torrent.get("swarm") or {}
+    if not isinstance(swarm, dict):
+        raise BadPayload("torrent.swarm must be an object")
     return {
-        "name": torrent.get("name", ""),
-        "size": int(torrent.get("size", 0) or 0),
-        "infohash": torrent.get("infoHash", ""),
+        "name": str(torrent.get("name") or ""),
+        "size": _as_int(torrent.get("size"), "torrent.size"),
+        "infohash": str(torrent.get("infoHash") or ""),
         "files": files,
         "swarm": {
-            "seeders": int(swarm.get("seeders", 0) or 0),
-            "leechers": int(swarm.get("leechers", 0) or 0),
+            "seeders": _as_int(swarm.get("seeders"), "torrent.swarm.seeders"),
+            "leechers": _as_int(swarm.get("leechers"), "torrent.swarm.leechers"),
         },
     }
 
@@ -176,6 +202,10 @@ def map_prediction(pred: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
+# Cap request bodies so a single bad request cannot exhaust pod memory.
+MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "armiger-webhook/1.0"
     protocol_version = "HTTP/1.1"
@@ -188,34 +218,78 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _drain_body(self) -> None:
+        """Discard an unread request body so the connection can be reused."""
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+        except (TypeError, ValueError):
+            return
+        while length > 0:
+            chunk = self.rfile.read(min(65536, length))
+            if not chunk:
+                break
+            length -= len(chunk)
+
+    def _read_body(self) -> bytes:
+        """Read the request body, enforcing MAX_BODY_BYTES.
+
+        Raises BadPayload if it exceeds the limit; the excess is drained so
+        the connection stays usable after the 400.
+        """
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+        except (TypeError, ValueError):
+            raise BadPayload("invalid Content-Length")
+        if length > MAX_BODY_BYTES:
+            self._drain_body()
+            raise BadPayload(f"body exceeds {MAX_BODY_BYTES} bytes")
+        if length == 0:
+            return b"{}"
+        return self.rfile.read(length)
+
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/healthz":
-            self._send_json(
-                {
-                    "status": "ok",
-                    "model_dir": MODEL_DIR,
-                    "pipeline_loaded": _pipeline is not None,
-                }
-            )
+            if _pipeline_error is not None:
+                self._send_json(
+                    {"status": "error", "error": _pipeline_error}, 503
+                )
+            elif _pipeline is None:
+                self._send_json({"status": "loading"}, 503)
+            else:
+                self._send_json(
+                    {
+                        "status": "ok",
+                        "model_dir": MODEL_DIR,
+                        "pipeline_loaded": _pipeline is not None,
+                    }
+                )
         else:
             self._send_json({"error": "not found"}, 404)
 
     def do_POST(self) -> None:  # noqa: N802
         if self.path != "/classify":
+            self._drain_body()
             self._send_json({"error": "not found"}, 404)
             return
         try:
-            length = int(self.headers.get("Content-Length", 0) or 0)
-            raw = self.rfile.read(length) if length > 0 else b"{}"
+            raw = self._read_body()
             payload = json.loads(raw or b"{}")
-        except Exception as exc:  # noqa: BLE001
+            if not isinstance(payload, dict):
+                raise BadPayload("request body must be a JSON object")
+            row = build_row(payload.get("torrent") or {})
+        except BadPayload as exc:
             self._send_json({"error": f"bad request: {exc}"}, 400)
             return
+        except json.JSONDecodeError as exc:
+            self._send_json({"error": f"bad request: invalid JSON ({exc})"}, 400)
+            return
+        except Exception as exc:  # noqa: BLE001
+            log.exception("request processing failed")
+            self._send_json({"error": str(exc)}, 400)
+            return
 
-        torrent = payload.get("torrent", {}) or {}
         try:
             pipeline = get_pipeline()
-            row = build_row(torrent)
             pred = pipeline.classify(row)
             resp = map_prediction(pred)
             self._send_json(resp)

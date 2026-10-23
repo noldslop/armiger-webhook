@@ -8,11 +8,19 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Install uv (pinned) for fast, reproducible Python dependency installation.
+RUN pip install --no-cache-dir uv==0.7.15
+
 # Python dependencies.
 # torch is installed CPU-only from the PyTorch index (keeps the image small);
 # the rest come from PyPI.
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
-    && pip install --no-cache-dir numpy onnxruntime cryptography
+RUN uv pip install --system torch --default-index https://download.pytorch.org/whl/cpu \
+    && uv pip install --system numpy onnxruntime cryptography \
+    && uv cache clean
+
+# Unprivileged runtime user (Debian's "nobody" UID/GID).
+RUN groupadd --system --gid 65532 app \
+    && useradd --system --uid 65532 --gid app --home-dir /app --shell /usr/sbin/nologin app
 
 WORKDIR /app
 
@@ -25,7 +33,9 @@ RUN git clone https://github.com/spencernorton/armiger /app/armiger \
     && rm -rf /app/armiger/.git
 
 # Copy the webhook service
-COPY armiger_webhook.py /app/
+COPY --chown=app:app armiger_webhook.py /app/
+
+USER app
 
 ENV ARMIGER_MODEL_DIR=/app/armiger \
     PORT=8096 \

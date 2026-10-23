@@ -53,9 +53,10 @@ content types (`movie`, `tv_show`, `xxx`, `music`, `comic`, `game`, `audiobook`,
 
 ## Building
 
-The image is built with buildah (or any OCI builder). It clones Armiger at a pinned
-commit and installs the Python dependencies (torch CPU-only, onnxruntime, numpy,
-cryptography).
+The image is built with buildah (or any OCI builder). It uses uv to install the
+Python dependencies (torch CPU-only, onnxruntime, numpy, cryptography) and clones
+Armiger at a pinned commit. The container runs as the unprivileged `app` user
+(UID 65532, the `nobody` user on Debian).
 
 ```bash
 buildah bud -t reg.dc/noldslop/armiger-webhook:latest .
@@ -66,6 +67,13 @@ To build from a different Armiger commit:
 
 ```bash
 buildah bud --build-arg ARMIGER_REF=<sha-or-branch> -t reg.dc/noldslop/armiger-webhook:latest .
+```
+
+For in-cluster builds that can't reach docker.io, override the base image with
+the local registry mirror:
+
+```bash
+buildah bud --build-arg BASE_IMAGE=reg.dc/library/python:3.12-slim -t ... .
 ```
 
 ## Wiring into bitmagnet
