@@ -298,24 +298,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": str(exc)}, 400)
             return
 
-        log.debug("classify request: %s", json.dumps(payload, default=str))
-
         try:
             pipeline = get_pipeline()
-            pred_start = time.monotonic()
             pred = pipeline.classify(row)
-            pred_ms = (time.monotonic() - pred_start) * 1000
             resp = map_prediction(pred)
             elapsed_ms = (time.monotonic() - start) * 1000
             log.info(
-                "classify %s: delete=%s contentType=%s baseTitle=%r year=%s tags=%s "
-                "(pipeline %.1fms, total %.1fms)",
+                "classify %s: delete=%s contentType=%s baseTitle=%r year=%s tags=%s (%.1fms)",
                 row["infohash"] or row["name"] or "<unnamed>",
                 resp.get("delete"), resp.get("contentType"),
                 resp.get("baseTitle"), resp.get("year"), resp.get("tags"),
-                pred_ms, elapsed_ms,
+                elapsed_ms,
             )
-            log.debug("classify prediction: %s", json.dumps(pred, default=str))
             self._send_json(resp)
         except Exception as exc:  # noqa: BLE001
             log.exception("classify failed")
