@@ -20,6 +20,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # ---------------------------------------------------------------------------
@@ -271,6 +272,7 @@ class Handler(BaseHTTPRequestHandler):
             self._drain_body()
             self._send_json({"error": "not found"}, 404)
             return
+        start = time.monotonic()
         try:
             raw = self._read_body()
             payload = json.loads(raw or b"{}")
@@ -278,9 +280,17 @@ class Handler(BaseHTTPRequestHandler):
                 raise BadPayload("request body must be a JSON object")
             row = build_row(payload.get("torrent") or {})
         except BadPayload as exc:
+            log.info(
+                "classify 400 in %.1fms: bad payload: %s",
+                (time.monotonic() - start) * 1000, exc,
+            )
             self._send_json({"error": f"bad request: {exc}"}, 400)
             return
         except json.JSONDecodeError as exc:
+            log.info(
+                "classify 400 in %.1fms: invalid JSON: %s",
+                (time.monotonic() - start) * 1000, exc,
+            )
             self._send_json({"error": f"bad request: invalid JSON ({exc})"}, 400)
             return
         except Exception as exc:  # noqa: BLE001
@@ -288,10 +298,24 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": str(exc)}, 400)
             return
 
+        log.debug("classify request: %s", json.dumps(payload, default=str))
+
         try:
             pipeline = get_pipeline()
+            pred_start = time.monotonic()
             pred = pipeline.classify(row)
+            pred_ms = (time.monotonic() - pred_start) * 1000
             resp = map_prediction(pred)
+            elapsed_ms = (time.monotonic() - start) * 1000
+            log.info(
+                "classify %s: delete=%s contentType=%s baseTitle=%r year=%s tags=%s "
+                "(pipeline %.1fms, total %.1fms)",
+                row["infohash"] or row["name"] or "<unnamed>",
+                resp.get("delete"), resp.get("contentType"),
+                resp.get("baseTitle"), resp.get("year"), resp.get("tags"),
+                pred_ms, elapsed_ms,
+            )
+            log.debug("classify prediction: %s", json.dumps(pred, default=str))
             self._send_json(resp)
         except Exception as exc:  # noqa: BLE001
             log.exception("classify failed")
