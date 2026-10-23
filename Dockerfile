@@ -1,4 +1,7 @@
-FROM python:3.12-slim
+# Base image is a build arg so in-cluster builds can point at the local
+# registry mirror (trow) to avoid docker.io rate limits.
+ARG BASE_IMAGE=python:3.12-slim
+FROM ${BASE_IMAGE}
 
 # System packages: git (clone armiger at build time), curl (healthcheck)
 RUN apt-get update \
