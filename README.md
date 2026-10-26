@@ -59,21 +59,13 @@ Armiger at a pinned commit. The container runs as the unprivileged `app` user
 (UID 65532, the `nobody` user on Debian).
 
 ```bash
-buildah bud -t reg.dc/noldslop/armiger-webhook:latest .
-buildah push reg.dc/noldslop/armiger-webhook:latest docker://reg.dc/noldslop/armiger-webhook:latest
+buildah bud -t armiger-webhook:latest .
 ```
 
 To build from a different Armiger commit:
 
 ```bash
-buildah bud --build-arg ARMIGER_REF=<sha-or-branch> -t reg.dc/noldslop/armiger-webhook:latest .
-```
-
-For in-cluster builds that can't reach docker.io, override the base image with
-the local registry mirror:
-
-```bash
-buildah bud --build-arg BASE_IMAGE=reg.dc/library/python:3.12-slim -t ... .
+buildah bud --build-arg ARMIGER_REF=<sha-or-branch> -t armiger-webhook:latest .
 ```
 
 ## Wiring into bitmagnet
@@ -81,10 +73,4 @@ buildah bud --build-arg BASE_IMAGE=reg.dc/library/python:3.12-slim -t ... .
 `classifier.yml` in this repo is the bitmagnet classifier workflow. It is the core
 workflow with one added step: when the built-in heuristics can't determine a content
 type, it calls this service's `/classify` endpoint. Mount it into bitmagnet and point
-the `webhook.url` at the in-cluster service address
-(`http://armiger.armiger.svc.cluster.local:8096/classify`).
-
-## CI
-
-`.woodpecker.yaml` builds and pushes the image to `reg.dc` on push to `main` via
-`woodpeckerci/plugin-docker-buildx`.
+the `webhook.url` at this service's `/classify` address.

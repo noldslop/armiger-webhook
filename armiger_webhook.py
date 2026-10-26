@@ -2,7 +2,7 @@
 """Armiger bitmagnet webhook classifier service.
 
 Implements the bitmagnet classifier webhook contract
-(noldslop/bitmagnet internal/classifier/action_webhook.go):
+(bitmagnet internal/classifier/action_webhook.go):
 
   POST /classify  -> JSON response with matched/delete/contentType/baseTitle/year/languages/tags
   GET  /healthz   -> {"status":"ok"}, or 503 when the pipeline failed to load
@@ -22,13 +22,22 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Make the armiger modules importable (flat module layout at the repo root).
+# Make the armiger package importable and locate the model data dir.
+#
+# As of armiger 7fb5ef2 the Python package lives under src/ in the armiger
+# checkout, and the model weights no longer ship in the repo — they are
+# downloaded (SHA-256 verified) from HuggingFace via armiger.artifacts into
+# a dedicated data dir. So the code dir and the data dir are now separate.
 # ---------------------------------------------------------------------------
-MODEL_DIR = os.environ.get("ARMIGER_MODEL_DIR", "/app/armiger")
-if MODEL_DIR not in sys.path:
-    sys.path.insert(0, MODEL_DIR)
+CODE_DIR = os.environ.get("ARMIGER_CODE_DIR", "/app/armiger")
+MODEL_DIR = os.environ.get("ARMIGER_MODEL_DIR", "/app/models")
+if CODE_DIR not in sys.path:
+    sys.path.insert(0, CODE_DIR)
+if (Path(CODE_DIR) / "src") not in sys.path:
+    sys.path.insert(0, str(Path(CODE_DIR) / "src"))
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -49,7 +58,14 @@ def get_pipeline():
         with _pipeline_lock:
             if _pipeline is None and _pipeline_error is None:
                 try:
-                    from armiger_ultra_pipeline import ArmigerUltraPipeline
+                    from armiger import ArmigerUltraPipeline
+                    from armiger.artifacts import download_model
+
+                    # Weights no longer ship in the armiger checkout; fetch them
+                    # (SHA-256 verified, idempotent no-op when already present)
+                    # into the data dir before loading.
+                    log.info("Ensuring Armiger model data present in %s ...", MODEL_DIR)
+                    download_model(MODEL_DIR, variant="ultra")
 
                     log.info("Loading ArmigerUltraPipeline from %s ...", MODEL_DIR)
                     _pipeline = ArmigerUltraPipeline.from_directory(
