@@ -27,7 +27,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Make the armiger package importable and locate the model data dir.
 #
-# As of armiger 7fb5ef2 the Python package lives under src/ in the armiger
+# The Python package lives under src/ in the armiger
 # checkout, and the model weights no longer ship in the repo — they are
 # downloaded (SHA-256 verified) from HuggingFace via armiger.artifacts into
 # a dedicated data dir. So the code dir and the data dir are now separate.

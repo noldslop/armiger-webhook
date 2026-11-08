@@ -17,8 +17,8 @@ uv sync                          # install deps into .venv
 ARMIGER_CODE_DIR=<armiger-clone> ARMIGER_MODEL_DIR=<models-dir> uv run armiger_webhook.py
 ```
 
-- `ARMIGER_CODE_DIR` (default `/app/armiger`) points at a git checkout of `spencernorton/armiger`; the service prepends both `<dir>` and `<dir>/src` to `sys.path` and imports `ArmigerUltraPipeline` from the `armiger` package. (The package lives under `src/` as of armiger `7fb5ef2`.)
-- `ARMIGER_MODEL_DIR` (default `/app/models`) is a **data-only** directory, no longer the git checkout. Model weights were removed from the armiger repo and are now fetched from HuggingFace (`NorviTech/armiger-ultra`, SHA-256 verified via `armiger.artifacts.download_model`) at first load. The dir must be writable by the running user.
+- `ARMIGER_CODE_DIR` (default `/app/armiger`) points at a git checkout of `spencernorton/armiger`; the service prepends both `<dir>` and `<dir>/src` to `sys.path` and imports `ArmigerUltraPipeline` from the `armiger` package. (The package lives under `src/`.)
+- `ARMIGER_MODEL_DIR` (default `/app/models`) is a **data-only** directory, no longer the git checkout. In the container image the model weights are baked in at build time (checksum-verified `ADD`s from HuggingFace `NorviTech/armiger-ultra`), so the runtime `download_model()` call only re-verifies them and is a no-op. When running from source locally, the weights are fetched from HuggingFace (SHA-256 verified via `armiger.artifacts.download_model`) at first load, so the dir must be writable by the running user.
 - `torch` is pulled CPU-only from the pytorch wheel index (`[tool.uv.sources]`), mirroring the Dockerfile.
 
 The Armiger repo itself is not vendored — it is cloned at build time in the Dockerfile at the pinned `ARMIGER_REF`. To run locally, clone armiger at that commit, point `ARMIGER_CODE_DIR` at it, and give `ARMIGER_MODEL_DIR` a writable directory for the HuggingFace download (e.g. `~/armiger-models`).
